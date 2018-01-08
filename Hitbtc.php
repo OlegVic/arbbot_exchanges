@@ -17,17 +17,17 @@ class Hitbtc extends Exchange {
     }
 
     public function addFeeToPrice( $price ) {
-        return $price * 1.0025;
+        return $price * 1.003;
 
     }
 
     public function deductFeeFromAmountBuy( $amount ) {
-        return $amount * 0.9975;
+        return $amount * 0.997;
 
     }
 
     public function deductFeeFromAmountSell( $amount ) {
-        return $amount * 0.9975;
+        return $amount * 0.997;
 
     }
 
@@ -106,7 +106,7 @@ class Hitbtc extends Exchange {
 
     public function getFilledOrderPrice( $type, $tradeable, $currency, $id ) {
         $market = $tradeable . $currency;
-        $result = $this->queryAPI( 'history/trades/' . $market );
+        $result = $this->queryAPI( 'history/trades?symbol=' . $market . '&sort=DESC&by=timestamp&limit=10' );
         $id = trim( $id, '{}' );
 
         foreach ($result as $order) {
@@ -124,13 +124,16 @@ class Hitbtc extends Exchange {
         // Since this exchange was added after merging of the pl-rewrite branch, we don't
         // need the full trade history for the initial import, so we can ignore $recentOnly!
 
-        $result = $this->queryAPI( 'history/trades' );
+        $result = $this->queryAPI( 'history/trades?sort=DESC&by=timestamp&limit=100' );
         $currencies = $this->queryMarkets();
 
         foreach ($result as $row) {
             $market = $row[ 'symbol' ];
+
             $currency = $currencies[ $market ][ 'quoteCurrency' ];
             $tradeable = $currencies[ $market ][ 'baseCurrency' ];
+
+            $market = $tradeable . "_" .$tradeable;
 
             if (!in_array( $market, array_keys( $results ) )) {
                 $results[ $market ] = array();
@@ -146,10 +149,11 @@ class Hitbtc extends Exchange {
                 'type' => strtolower( $row[ 'side' ] ),
                 'time' => strtotime( $row[ 'timestamp' ] ),
                 'rate' => $row[ 'price' ],
-                'amount' => $amount,
+                'amount' => formatBTC( $amount ),
                 'fee' => $feeFactor * $row[ 'fee' ],
-                'total' => $row[ 'price' ],
+                'total' => $row[ 'price' ] * $amount,
             );
+
         }
 
         foreach ( array_keys( $results ) as $market ) {
@@ -159,59 +163,72 @@ class Hitbtc extends Exchange {
         return $results;
     }
 
-    public function queryRecentDeposits( $currency = null ) {
+    public function getRecentOrderTrades( &$arbitrator, $tradeable, $currency, $type, $orderID, $tradeAmount ) {
 
-        $req = $currency ? "/" . $currency : '';
-        $history = $this->queryAPI( 'account/transactions' . $req );
+        $results = $this->queryAPI( 'history/trades?sort=DESC&by=timestamp&limit=100&symbol=' . $tradeable . $currency );
+
+        $trades = array( );
+        $feeFactor = ($type == 'sell') ? -1 : 1;
+        foreach ( $results as $row ) {
+            if($row[ 'clientOrderId' ] != $orderID){
+                continue;
+            }
+            $trades[] = array(
+                'rawID' => $row[ 'id' ] . '/' . $row[ 'orderId' ],
+                'id' => $orderID,
+                'currency' => $currency,
+                'tradeable' => $tradeable,
+                'type' => $type,
+                'time' => strtotime( $row[ 'timestamp' ] ),
+                'rate' => floatval( $row[ 'price' ] ),
+                'amount' => floatval( $row[ 'quantity' ] ),
+                'fee' => floatval( $row[ 'fee' ] * $feeFactor ),
+                'total' => floatval( $row[ 'price' ] * $row[ 'quantity' ] ),
+            );
+        }
+
+        return $trades;
+
+    }
+
+    private function queryRecentTransfers( $type, $currency ) {
+
+        $req = $currency ? "&currency=" . $currency : '';
+        $history = $this->queryAPI( 'account/transactions?sort=DESC&by=timestamp&limit=100' . $req );
 
         $result = array();
         foreach ( $history as $row ) {
-            if($row[ 'type' ] != 'payout'){
-                continue;
+            if($row[ 'type' ] == $type){
+                $result[] = array(
+                    'currency' => $row[ 'currency' ],
+                    'amount' => formatBTC( $row[ 'amount' ]),
+                    'txid' => $row[ 'hash' ],
+                    'address' => $row[ 'address' ],
+                    'time' => strtotime( $row[ 'updatedAt' ] ),
+                    'pending' => $row[ 'status' ] != 'success',
+                );
             }
-            $result[] = array(
-                'currency' => $row[ 'currency' ],
-                'amount' => $row[ 'amount' ],
-                'txid' => $row[ 'hash' ],
-                'address' => $row[ 'address' ],
-                'time' => strtotime( $row[ 'updatedAt' ] ),
-                'pending' => $row[ 'status' ] == 'pending',
-            );
         }
 
         usort( $result, 'compareByTime' );
 
         return $result;
+
+    }
+
+    public function queryRecentDeposits( $currency = null ) {
+
+        return $this->queryRecentTransfers( 'payin', $currency );
 
     }
 
     public function queryRecentWithdrawals( $currency = null ) {
 
-        $req = $currency ? "/" . $currency : '';
-        $history = $this->queryAPI( 'account/transactions' . $req );
-
-        $result = array();
-        foreach ( $history as $row ) {
-            if($row[ 'type' ] != 'payout'){
-                continue;
-            }
-            $result[] = array(
-                'currency' => $row[ 'currency' ],
-                'amount' => $row[ 'amount' ],
-                'txid' => $row[ 'hash' ],
-                'address' => $row[ 'address' ],
-                'time' => strtotime( $row[ 'createdAt' ] ),
-                'pending' => $row[ 'status' ] == 'pending',
-            );
-        }
-
-        usort( $result, 'compareByTime' );
-
-        return $result;
+        return $this->queryRecentTransfers( 'payout', $currency );
 
     }
 
-     function fetchOrderbook( $tradeable, $currency ) {
+    function fetchOrderbook( $tradeable, $currency ) {
 
         $orderbook = $this->queryOrderbook( $tradeable, $currency );
         if ( count( $orderbook ) == 0 ) {
@@ -249,7 +266,7 @@ class Hitbtc extends Exchange {
             return true;
         }
         catch ( Exception $ex ) {
-            if ( strpos( $ex->getMessage(), 'ORDER_NOT_OPEN' ) === false ) {
+            if ( strpos( $ex->getMessage(), 'Order not found' ) === false ) {
                 logg( $this->prefix() . "Got an exception in cancelOrder(): " . $ex->getMessage() );
                 return true;
             }
@@ -290,8 +307,7 @@ class Hitbtc extends Exchange {
                 continue;
             }
 
-            if ( !key_exists( $tradeable, $currencies ) ||
-                $currencies[ $tradeable ][ 'payinEnabled' ] == false ||
+            if ( $currencies[ $tradeable ][ 'payinEnabled' ] == false ||
                 $currencies[ $tradeable ][ 'payoutEnabled' ] == false ||
                 $currencies[ $tradeable ][ 'transferEnabled' ] == false ) {
                 continue;
@@ -343,10 +359,35 @@ class Hitbtc extends Exchange {
             $result[ $coin ] = $balance;
         }
 
-        $balancesTrade = $this->queryBalancesTrade();
-        foreach ( $balancesTrade as $balance ) {
-            $result[ strtoupper( $balance[ 'currency' ] ) ] = $balance[ 'available' ] + $balance[ 'reserved' ];
+        $history = $this->queryDepositsAndWithdrawals();
+        foreach ( $history as $row ) {
+            if( $row[ 'status' ] != 'pending'){
+                continue;
+            }
+            $coin = $row[ 'currency' ];
+            $result[ $coin ] += $row[ 'amount' ];
         }
+
+        try {
+            $balancesAccount = $this->queryBalancesAccount();
+            foreach ($balancesAccount as $balance) {
+                if( !key_exists( $balance[ 'currency' ], $result ) ) {
+                    continue;
+                }
+                if ($balance['available'] > 0) {
+                    $result[ strtoupper( $balance[ 'currency' ] ) ] += $balance[ 'available' ] + $balance[ 'reserved' ];
+                }
+            }
+        }
+        catch ( Exception $ex ) {
+            $error = $ex->getMessage();
+            logg($this->prefix() . $error);
+        }
+
+//        $balancesTrade = $this->queryBalancesTrade();
+//        foreach ( $balancesTrade as $balance ) {
+//            $result[ strtoupper( $balance[ 'currency' ] ) ] += $balance[ 'available' ] + $balance[ 'reserved' ];
+//        }
 
         return $result;
 
@@ -373,11 +414,20 @@ class Hitbtc extends Exchange {
             $wallets[ $coin ] = 0;
         }
 
-        $balancesAccount = $this->queryBalancesAccount();
-        foreach ( $balancesAccount as $balance ) {
-            if ($balance[ 'available' ]>0){
-                $this->queryBalancesTransfer(strtoupper( $balance[ 'currency' ] ), $balance[ 'available' ], 'bankToExchange');
+        try {
+            $balancesAccount = $this->queryBalancesAccount();
+            foreach ($balancesAccount as $balance) {
+                if( !key_exists( $balance[ 'currency' ], $wallets ) ) {
+                    continue;
+                }
+                if ($balance['available'] > 0) {
+                    $this->queryBalancesTransfer(strtoupper($balance['currency']), $balance['available'], 'bankToExchange');
+                }
             }
+        }
+        catch ( Exception $ex ) {
+            $error = $ex->getMessage();
+            logg($this->prefix() . $error);
         }
 
         $balances = $this->queryBalancesTrade();
@@ -426,7 +476,7 @@ class Hitbtc extends Exchange {
         for ( $i = 0; $i < 100; $i++ ) {
             try {
                 $data = $this->queryAPI( 'account/crypto/address/' . $coin );
-                return $data[ 'Address' ];
+                return $data[ 'address' ];
             }
             catch ( Exception $ex ) {
                 $info = json_decode($ex->getTrace()[ 0 ][ 'args' ][ 0 ]);
@@ -440,6 +490,11 @@ class Hitbtc extends Exchange {
             }
         }
 
+    }
+
+    private function queryDepositsAndWithdrawals()
+    {
+        return $this->queryAPI('account/transactions?sort=DESC&by=timestamp&limit=100' );
     }
 
     private function queryOrderbook( $tradeable, $currency ) {
@@ -481,7 +536,7 @@ class Hitbtc extends Exchange {
     }
 
     private function queryOpenOrders() {
-        return $this->queryAPI( 'order' );
+        return $this->queryAPI( 'order?limit=100' );
 
     }
 
@@ -492,6 +547,7 @@ class Hitbtc extends Exchange {
                 'symbol' => $tradeable . $currency,
                 'side' => strtolower( $orderType ),
                 'quantity' => formatBTC( $amount ),
+                'type' => 'limit',
                 'price' => formatBTC( $rate ),
 //                'strictValidate' => 'true'
             ]
@@ -515,7 +571,7 @@ class Hitbtc extends Exchange {
         return $this->queryAPI( 'account/transfer', 'POST',
             [
                 'currency' => $currency,
-                'amount' => $amount,
+                'amount' => formatBTC( $amount ),
                 'type' => $way
             ]
             );
@@ -524,7 +580,7 @@ class Hitbtc extends Exchange {
 
     private function queryWithdraw( $coin, $amount, $address ) {
         $this->queryBalancesTransfer($coin, $amount, 'exchangeToBank');
-        sleep(5);
+        sleep(1);
         return $this->queryAPI( 'account/crypto/withdraw', 'POST',
             [
                 'currency' => $coin,
@@ -545,7 +601,7 @@ class Hitbtc extends Exchange {
         }
 
         if ( key_exists( 'error', $data ) ) {
-            throw new Exception( "API error response: " . $data[ 'error' ][ 'message' ] );
+            throw new Exception( "API error response: Code [" . $data[ 'error' ][ 'code' ] . "] " . $data[ 'error' ][ 'message' ] );
         }
 
         return $data;
@@ -560,19 +616,24 @@ class Hitbtc extends Exchange {
         $uri = Hitbtc::PRIVATE_URL . $method;
 
         static $ch = null;
-        if ( is_null( $ch ) ) {
+//        if ( is_null( $ch ) ) {
             $ch = curl_init();
             curl_setopt( $ch, CURLOPT_RETURNTRANSFER, TRUE );
             curl_setopt( $ch, CURLOPT_SSL_VERIFYPEER, TRUE );
             curl_setopt( $ch, CURLOPT_USERAGENT, 'Mozilla/4.0 (compatible; Cryptsy API PHP client; ' . php_uname( 's' ) . '; PHP/' . phpversion() . ')' );
-        }
+//        }
         $post_data = http_build_query( $param, '', '&' );
+        $header = [ ];
         if($request == 'POST'){
             curl_setopt( $ch, CURLOPT_POSTFIELDS, $post_data );
+            $header[] = 'application/x-www-form-urlencoded';
+        }else{
+            $header[] = 'accept: application/json';
         }
         if($request == 'PUT' || $request == 'DELETE'){
             curl_setopt( $ch, CURLOPT_CUSTOMREQUEST, $request);
         }
+        curl_setopt( $ch, CURLOPT_HTTPHEADER, $header);
         curl_setopt( $ch, CURLOPT_USERPWD, $key . ":" . $secret);
         curl_setopt( $ch, CURLOPT_URL, $uri );
         curl_setopt( $ch, CURLOPT_CONNECTTIMEOUT, 10 );
@@ -583,22 +644,16 @@ class Hitbtc extends Exchange {
             try {
                 $data = curl_exec( $ch );
                 $code = curl_getinfo( $ch, CURLINFO_HTTP_CODE );
-                if ($code != 200) {
-                    if ($code == 400) {
-                        $error = $this->prefix() . "Error: " . $data;
-                        logg($error);
-                    }
-
-                    throw new Exception( "HTTP ${code} received from server" . $uri . " [". print_r($post_data, true) . "]" );
+                if ( $code == 600 ) {
+                    throw new Exception( "HTTP ${code} received from server" );
                 }
                 //
 
-                if ( $data === false ) {
+                if ( $data === false || $data == '' ) {
                     $error = $this->prefix() . "Could not get reply: " . curl_error( $ch );
                     logg( $error );
                     continue;
                 }
-
                 return $this->xtractResponse( $data );
             }
             catch ( Exception $ex ) {
