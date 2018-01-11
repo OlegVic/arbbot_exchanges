@@ -80,7 +80,7 @@ class Hitbtc extends Exchange {
             return $this->queryOrder( $tradeable, $currency, 'buy', $rate, $amount );
         }
         catch ( Exception $ex ) {
-            if ( strpos( $ex->getMessage(), 'MARKET_OFFLINE' ) !== false ) {
+            if ( strpos( $ex->getMessage(), '_OFFLINE' ) !== false ) {
                 $this->onMarketOffline( $tradeable );
             }
             logg( $this->prefix() . "Got an exception in buy(): " . $ex->getMessage() );
@@ -95,7 +95,7 @@ class Hitbtc extends Exchange {
             return $this->queryOrder( $tradeable, $currency, 'sell', $rate, $amount );
         }
         catch ( Exception $ex ) {
-            if ( strpos( $ex->getMessage(), 'MARKET_OFFLINE' ) !== false ) {
+            if ( strpos( $ex->getMessage(), '_OFFLINE' ) !== false ) {
                 $this->onMarketOffline( $tradeable );
             }
             logg( $this->prefix() . "Got an exception in sell(): " . $ex->getMessage() );
