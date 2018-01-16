@@ -397,7 +397,7 @@ class Hitbtc extends Exchange {
 
     public function getSmallestOrderSize() {
 
-        return '0.00100000';
+        return '0.01000000';
 
     }
 
